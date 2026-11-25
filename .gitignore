@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/raw/
+data/linguistics/
+outputs/
+*.pt
+*.ckpt
+.DS_Store

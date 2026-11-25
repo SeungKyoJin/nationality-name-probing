@@ -1,0 +1,84 @@
+# default settings
+experiment:
+  mode: "train"                       # train | inference
+  name: "hierarchical_transformer_v1"
+  description: "168개국 국적 + 38 언어권 Hierarchical 분류 (NamePrism CEL taxonomy)"
+  seed: 42
+  device: "cuda"                      # cuda | cpu
+  result_directory: "outputs"
+
+data:
+  raw_path: "./data/raw/concat_names_mapped.csv"
+  ngram: "multi"                      # uni, bi, tri, mixed, multi
+  max_length: 90
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  dataset_filter: null                # null=전체, "a"=olympic only, "b"=wiki only
+  synthetic_path: null #"./data/raw/synthetic_names.csv"   # LLM 합성 데이터 (train only)
+  augment: false #true                       # 소수 클래스 character-level augmentation
+  augment_target: 400                 # 이 수 미만인 클래스를 이 수까지 채움 (F1=0% 데이터부족 클래스 전수 커버)
+
+model:
+  type: "multichannel_conformer"      # exp2+exp4 결합: Conformer + ConvStem + Channel Ensemble
+  embedding_dim: 256
+  hidden_dim: 1024
+  n_head: 8
+  n_layers: 4                         # grid search best (260512/260513)
+  dropout: 0.2
+  num_classes: 168                    # NOC (168개국)
+  num_lang_groups: 39                 # LanguageGroup (NamePrism CEL — 39 leaves, Figure 5)
+  # ─── Architecture options ───
+  fusion_type: "linear"               # linear | gated | linguistic
+  pool_type: "attention"              # attention | mean | max | cls
+  typology_path: "data/linguistics/typology_prior.json"
+  # ─── Conformer 전용 (arch_exp4 final: ConvStem off + Channel Ensemble + Uniform fusion) ───
+  # Gate fusion 시도했으나 모든 지표 -2.3pp 하락 → uniform 평균이 final
+  conv_kernels: [2, 3, 5]             # uni/bi/tri 채널별 커널
+  cross_attn_per_layer: false
+  conv_stem: false                    # exp4 단독 (exp2 결합 실패 검증)
+  conv_stem_kernel: 5
+  conv_stem_layers: 4
+  conv_stem_type: "standard"          # standard | multiscale
+  conv_stem_kernels: [3, 5, 7]        # multiscale일 때만 사용
+  channel_ensemble_head: true         # ★ exp4 핵심: 채널별 독립 dual head
+  channel_fusion_type: "uniform"      # ★ FINAL: uniform 1/3 평균 (gate ablation 결과 열등)
+
+train:
+  batch_size: 128
+  epochs: 300
+  learning_rate: 3.0e-5               # grid search best (260512/260513, n_layers=4)
+  weight_decay: 0.01
+  patience: 7
+  alpha: 0.3                          # Hierarchical Loss: L = α·L_lang + (1-α)·L_nat (paper FINAL = 0.3)
+  class_weight: false #true                  # Inverse frequency class-weighted CrossEntropyLoss
+  save_dir: "checkpoints"
+  save_name: "arch_exp4_final.pt"
+  # ─── Contrastive auxiliary loss ───
+  contrastive_weight: 0.0              # γ ≥ 0. 0=비활성, 권장값 0.1~0.5
+  contrastive_variant: "hier"          # nat | lang | hier
+  contrastive_temperature: 0.07        # SupCon 원본 권장값
+  contrastive_lang_weight: 0.3         # hier variant에서 lang 비중
+  # ─── Linguistic-aware fusion auxiliary lang loss (신규) ───
+  aux_lang_weight: 0.1                 # β ≥ 0. fusion_type='linguistic'일 때만 사용
+
+grid_search:
+  # ─── Conformer + Channel Ensemble + Gate 기준 grid (2026-04-30 갱신) ───
+  # · 이전 TE 기준 (max_length=20, lr=1e-4)에서 갱신
+  # · 주말 weekend_full pipeline에서 step_conformer_grid가 사용
+  ngrams: ['multi']
+  max_lengths: [90]
+  learning_rates: [3.0e-5, 5.0e-5, 7.0e-5]
+  layers: [3, 4]                       # NEW: n_layers ablation
+  d_models: [256]                      # NEW: 256 fix (TE grid에서 256 우세 검증됨)
+  batch_sizes: [128]
+  weight_decays: [1.0e-2]
+  alphas: [0.0, 0.3, 0.5, 0.7, 1.0]   # α ablation은 step_conformer_alpha에서 별도 사용
+
+inference:
+  model_path: "outputs/checkpoints/260423/baseline_check.pt"
+  test_dataset_path: "./data/raw/concat_names_mapped.csv"
+  save_report: true
+  report_prefix: "external"
+  top_k: 5
+  batch_size: 100
